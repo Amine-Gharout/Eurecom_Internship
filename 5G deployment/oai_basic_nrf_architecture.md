@@ -48,3 +48,22 @@ This document breaks down the components of the `docker-compose-basic-nrf.yaml` 
 
 ### `oai-ext-dn` (External Data Network)
 * **Role:** A NAT (Network Address Translation) router. It takes data exiting the UPF and routes it to the host machine's internet connection, allowing the simulated 5G network to access the real world.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

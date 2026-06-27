@@ -1,29 +1,62 @@
-# Architecture Technique : Déploiement UERANSIM eBPF
+# Technical Architecture: UERANSIM eBPF Deployment
 
-**BLUF :** Ce document déconstruit la configuration `docker-compose-ueransim-ebpf.yaml`. Il explique comment le simulateur de réseau radio (RAN) contourne les goulots d'étranglement du noyau standard via eBPF, et comment il s'intègre au système hôte pour permettre le routage du trafic d'application réel, une condition stricte pour extraire des métriques de latence fiables pour un pipeline d'apprentissage par renforcement.
+**BLUF:** This document breaks down the `docker-compose-ueransim-ebpf.yaml` configuration. It explains how the radio access network (RAN) simulator bypasses standard kernel bottlenecks using eBPF, and how it integrates with the host system to enable real application traffic routing — a strict requirement for extracting reliable latency metrics in a reinforcement learning pipeline.
 
----
+***
 
-## 1. Le Service Principal : `ueransim`
-Ce bloc définit le conteneur unique qui simule à la fois le gNodeB (l'antenne) et l'UE (le smartphone).
+## 1. Core Service: `ueransim`
 
-* **`image: oaisoftwarealliance/ueransim:...`** : Spécifie l'image Docker pré-compilée contenant les binaires C++ de UERANSIM.
-* **`privileged: true` / `cap_add: - NET_ADMIN`** : Commandes critiques. Elles accordent au conteneur les droits d'administration sur le sous-système réseau du noyau de la machine hôte. Sans cela, le conteneur ne peut pas créer l'interface virtuelle (`uesimtun0`) sur Pop!_OS.
-* **`devices: - /dev/net/tun:/dev/net/tun`** : Mappe le périphérique de tunnel réseau de l'hôte à l'intérieur du conteneur. C'est le pont matériel qui permet au trafic IP standard d'être encapsulé dans des paquets 5G.
-* **`environment:`** :
-    * `USE_EBPF=true` : Active le traitement des paquets via eBPF (Extended Berkeley Packet Filter). Cela permet d'exécuter le code de routage directement dans l'espace noyau à haute vitesse, évitant la surcharge CPU de l'espace utilisateur. Cela garantit que les baisses de débit mesurées par l'agent RL proviennent de la 5G, et non d'une surcharge du CPU local.
-    * `MCC`, `MNC`, `SST`, `SD` : Identifiants cryptographiques (Mobile Country Code, Network Code, Slice/Service Type). Ils doivent correspondre exactement à la configuration de l'AMF et du SMF pour que la connexion N1/N2 soit autorisée.
+This block defines the single container that simulates both the gNodeB (base station) and the UE (smartphone).
 
-## 2. Déclaration des Réseaux (Networks)
-Le conteneur doit se connecter à deux réseaux distincts gérés par le cœur 5G.
+- **`image: oaisoftwarealliance/ueransim:...`** — Specifies the prebuilt Docker image containing UERANSIM C++ binaries.
+- **`privileged: true` / `cap_add: - NET_ADMIN`** — Critical directives. They grant the container administrative rights over the host machine's kernel networking subsystem. Without this, the container cannot create the virtual interface (`uesimtun0`) on Pop!_OS.
+- **`devices: - /dev/net/tun:/dev/net/tun`** — Maps the host's network tunnel device into the container. This is the hardware bridge that allows standard IP traffic to be encapsulated into 5G packets.
 
-* **`demo-oai-public-net`** : Le réseau de gestion et du Control Plane. UERANSIM l'utilise pour envoyer des requêtes d'authentification (N1/N2) à l'AMF.
-* **`demo-oai-n3-net`** : Le réseau haut débit du Data Plane. UERANSIM l'utilise pour envoyer le trafic utilisateur brut (N3) directement à l'UPF eBPF. 
+### Environment Variables
 
-*Note : Ces réseaux portent la balise `external: true`, ce qui signifie que ce fichier Docker Compose ne les créera pas. Ils doivent déjà exister (déployés par le cœur OAI) avant le lancement de ce fichier.*
+- **`USE_EBPF=true`** — Enables packet processing via eBPF (Extended Berkeley Packet Filter). This allows routing logic to execute directly in kernel space at high speed, avoiding user-space CPU overhead. This ensures that throughput drops measured by the RL agent originate from the 5G network, not from local CPU saturation.
+- **`MCC`, `MNC`** — Mobile Country Code and Network Code. Cryptographic network identifiers that must exactly match the AMF and SMF configuration for the N1/N2 connection to be accepted.
+- **`SST`, `SD`** — Slice/Service Type identifiers. Must also align precisely with the core network slice configuration.
 
-## 3. Gestion des Volumes
-* **`volumes: - ./config:/openair-ueransim/config`** : Injecte les fichiers de configuration locaux (YAML ou JSON) dans le conteneur. Cela permet de modifier l'adresse IP de destination de l'AMF ou de l'UPF sans avoir à recompiler l'image Docker UERANSIM complète.
+***
 
-## 4. Dépendances (`depends_on`)
-Si cette section est présente, elle indique au moteur Docker d'attendre que des conteneurs spécifiques (comme `oai-amf` ou `oai-upf`) soient marqués comme "sains" (healthy) avant de tenter de démarrer le simulateur radio. Cela évite que UERANSIM ne sature le réseau avec des requêtes de connexion avant que le cœur ne soit prêt à les traiter.
+## 2. Network Definitions
+
+The container must connect to two distinct networks managed by the 5G core:
+
+- **`demo-oai-public-net`** — Management and Control Plane network. UERANSIM uses it to send authentication requests (N1/N2) to the AMF.
+- **`demo-oai-n3-net`** — High-throughput Data Plane network. UERANSIM uses it to send raw user traffic (N3) directly to the eBPF UPF.
+
+> **Note:** These networks are marked as `external: true`, meaning this Docker Compose file will **not** create them. They must already exist (deployed by the OAI core) before launching this configuration.
+
+***
+
+## 3. Volume Management
+
+- **`volumes: - ./config:/openair-ueransim/config`** — Injects local configuration files (YAML or JSON) into the container. This allows modifying the destination IP address of the AMF or UPF without rebuilding the full UERANSIM Docker image.
+
+***
+
+## 4. Dependencies (`depends_on`)
+
+If this section is present, it instructs the Docker engine to wait until specific containers (such as `oai-amf` or `oai-upf`) are marked as **healthy** before attempting to start the radio simulator. This prevents UERANSIM from flooding the network with connection requests before the core network is ready to handle them.
+
+***
+
+## Network Plane Architecture
+
+| Network | Purpose | Protocol Interface | Connected To |
+|---|---|---|---|
+| `demo-oai-public-net` | Control Plane (auth, signaling) | N1/N2 | AMF |
+| `demo-oai-n3-net` | Data Plane (user traffic) | N3 | UPF (eBPF) |
+
+***
+
+## Key Security & Capability Flags
+
+| Flag | Effect | Risk if Omitted |
+|---|---|---|
+| `privileged: true` | Full kernel access for the container | Cannot create `uesimtun0` tunnel interface |
+| `cap_add: NET_ADMIN` | Fine-grained network admin capability | Cannot configure routing tables or tunnel devices |
+| `/dev/net/tun` device mount | Access to host TUN/TAP kernel subsystem | No IP-over-5G encapsulation possible |
+| `USE_EBPF=true` | Kernel-space packet processing | Fallback to user-space; adds CPU overhead, skews RL latency metrics |
