@@ -16,6 +16,7 @@ obj.txt
 eggs/
 .eggs/
 lib/
+meet.txt
 lib64/
 parts/
 sdist/
