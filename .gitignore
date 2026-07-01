@@ -19,6 +19,10 @@ lib/
 meet.txt
 lib64/
 parts/
+
+# Environment
+.env
+
 sdist/
 var/
 wheels/
